@@ -24,7 +24,7 @@ var sequelize = new Sequelize('database', null, null, {
 const Genres = sequelize.define('genres', {
   id: {
     type: Sequelize.INTEGER,
-    allowNull: false,
+    // allowNull: false,
     primaryKey: true
   },
   name: {
@@ -41,7 +41,7 @@ const Genres = sequelize.define('genres', {
 const Films = sequelize.define('films', {
   id: {
     type: Sequelize.INTEGER,
-    allowNull: false,
+    // allowNull: false,
     primaryKey: true
   },
   title: {
@@ -49,7 +49,7 @@ const Films = sequelize.define('films', {
     allowNull: false
   },
   release_date: {
-    type: Sequelize.STRING,
+    type: Sequelize.DATE,
     allowNull: false
   },
   tagline: {
@@ -57,11 +57,11 @@ const Films = sequelize.define('films', {
     allowNull: false
   },
   revenue: {
-    type: Sequelize.INTEGER,
+    type: Sequelize.BIGINT,
     allowNull: false
   },
   budget: {
-    type: Sequelize.INTEGER,
+    type: Sequelize.BIGINT,
     allowNull: false
   },
   runtime: {
@@ -80,7 +80,7 @@ const Films = sequelize.define('films', {
     type: Sequelize.INTEGER,
     allowNull: false,
     // sequelize alows to connect to other models
-    references:{
+    references: {
       model: Genres,
       key: 'id'
     }
@@ -94,11 +94,11 @@ const Films = sequelize.define('films', {
 
 
 // ROUTES
-app.get('/films/:id([0-9]+)/recommendations', getFilmRecommendations); //getFilmRecommendations
+app.get('/films/:id/recommendations', getFilmRecommendations); //getFilmRecommendations
 // if anything else rather than the route above it will handle a 404 response
-app.use('*', (req, res) => {
+app.get('*', (req, res) => {
   res.status(404).send({
-    Message: '404 This is not a valid route'
+    message: 'Not found'
   });
 });
 
@@ -106,6 +106,9 @@ app.use('*', (req, res) => {
 // ROUTE HANDLER
 function getFilmRecommendations(req, res) {
   // res.status(500).send('Not Implemented');
+  // variable to have all the matches for genre and date range
+  let films_match;
+  // object to populate and return
   let recommendations = {
     recommendations: []
   };
@@ -114,39 +117,142 @@ function getFilmRecommendations(req, res) {
 
      if (req.query.limit) {
 
-       recommendations.meta = { 'limit': parseInt(req.query.limit) };
-       recommendations.meta = { 'offset': parseInt(req.query.offset) };
+       recommendations.meta = { 
+         limit: parseInt(req.query.limit),
+         offset: parseInt(req.query.offset)
+          };
 
      } else {
 
-       recommendations.meta = { 'limit': 10 };
-       recommendations.meta = { 'offset': parseInt(req.query.offset) };
-
+       recommendations.meta = { 
+         limit: 10,
+         offset: parseInt(req.query.offset)
+         };
        
      }
   } else if (req.query.limit) {
 
-     recommendations.meta.limit = { 'limit': parseInt(req.query.limit) };
-     recommendations.meta.offset = { 'offset':1 };
+     recommendations.meta = { 
+       limit: parseInt(req.query.limit),
+       offset: 0
+       };
      
   } else {
 
-     recommendations.meta.limit = { 'limit': 10 };
-     recommendations.meta.offset = { 'offset':1 };
+     recommendations.meta = { 
+       limit: 10,
+       offset: 0
+       };
 
   }
-// 
+// Search for the film with the id parameter
   Films.findById(req.params.id)
-  .then((filmData)=>{
-    if(!filmData){
-      res.status(404).send({
-        Message: 'There is no film with that id'
+  .then(filmData => {
+    
+    if(!filmData || filmData === null){
+      res.status(422).send({
+        message: 'Not found'
       });
+      throw 'Wrong id';
     }
-    console.log(filmData.dataValues);
+   
     return filmData.dataValues;
     
-  });
+  })
+  .then(obj => {
+
+    // Need to associate tables
+    Films.belongsTo(Genres, {
+      foreignKey: 'genre_id'
+    });
+
+    // for date range
+    let date = new Date(obj.release_date);
+    let min_from = `${date.getFullYear() - 15}-${date.getMonth()}-${date.getDate()}`;
+    let max_from = `${date.getFullYear() + 15}-${date.getMonth()}-${date.getDate()}`;
+    console.log(date, 'this is min: ' + min_from, 'this is max: '+ max_from);
+
+// Getting all the films from db with same genre and within the date range
+    return Films.findAll({
+      include: [{
+        model: Genres
+        // where: { id: Sequelize.col('films.genre_id')}
+      }],
+      attributes: ['id', 'title', ['release_date', 'releaseDate']],
+      where: {
+        genre_id: obj.genre_id,
+        release_date: {
+          $between: [min_from, max_from] // sequelize have a between parameter for a range!
+        }
+      },
+      // limit: `${recommendations.meta.limit}`,
+      // offset: `${recommendations.meta.offset}`  
+    });
+  }) //Use the returned films to create an array of ids and get the ratings
+  .then(related => {
+    
+    let ids = [];
+    //save array of film objects
+    films_match = related.map(singleFilm => singleFilm.dataValues);
+    // populate array of ids
+    related.forEach(singleFilm => ids.push(singleFilm.id));
+    return ids;
+
+  })
+  .then(ids =>{
+    const url = 'http://credentials-api.generalassemb.ly/4576f55f-c427-4cfc-a11c-5bfe914ca6c1?films=';
+    
+    request.get(`${url}${ids}`, function (err, res, body) {
+
+      let reviews = JSON.parse(res.body);
+      let avg_rating = 0;
+
+      reviews.forEach(movie => {
+        
+        if(movie.reviews.length >= 5){
+        
+          let add = (increase, current) => increase + current;
+          movie.reviews.map(rate => avg_rating += rate.rating);
+          
+          let filmAverage = Number((avg_rating / movie.reviews.length).toFixed(1));
+
+         
+          // checking if average is greater than 4, if so add average rating to the array and push to the recomendations array
+          if(filmAverage >= 4.0){
+
+            films_match.find((film, i)=>{
+
+              if(movie.film_id === film.id){
+
+                films_match[i].genre = films_match[i].genre.name;
+                films_match[i].averageRating = filmAverage;
+                films_match[i].reviews = movie.reviews.length;
+
+                recommendations.recommendations.push(films_match[i]);
+
+                return true; 
+              }
+            });
+          }
+        }
+      });
+      //offseting and limiting the recomendations object before sending it
+       if (recommendations.meta.offset > 0) {
+
+         recommendations.recommendations.splice(0, recommendations.meta.offset);
+       }
+       
+       if (recommendations.recommendations.length > recommendations.meta.limit) {
+
+         recommendations.recommendations.splice(recommendations.meta.limit, recommendations.recommendations.length - recommendations.meta.limit);
+
+       }
+
+      responseFunction();
+    });
+  }).catch(err => console.log(err));
+  
+let responseFunction = ()=>{res.status(200).json(recommendations);}
 }
 
 module.exports = app;
