@@ -112,7 +112,7 @@ function getFilmRecommendations(req, res) {
   let recommendations = {
     recommendations: []
   };
-   // check if query values for metadata exist, else they're assigned default values
+   // check if query values for metadata exist, else they're assigned default values. Create the meta object.
    if (req.query.offset) {
 
      if (req.query.limit) {
@@ -175,8 +175,8 @@ function getFilmRecommendations(req, res) {
 // Getting all the films from db with same genre and within the date range
     return Films.findAll({
       include: [{
-        model: Genres
-        // where: { id: Sequelize.col('films.genre_id')}
+        model: Genres,
+        where: { id: Sequelize.col('films.genre_id')}
       }],
       attributes: ['id', 'title', ['release_date', 'releaseDate']],
       where: {
@@ -205,54 +205,63 @@ function getFilmRecommendations(req, res) {
     request.get(`${url}${ids}`, function (err, res, body) {
 
       let reviews = JSON.parse(res.body);
-      let avg_rating = 0;
 
-      reviews.forEach(movie => {
+      reviews.forEach(rev => {
         
-        if(movie.reviews.length >= 5){
+        if(rev.reviews.length >= 5){
+          // variable for  sum rating must be declared after checking length of array 
+          let avg_rating = 0;
+
         
-          let add = (increase, current) => increase + current;
-          movie.reviews.map(rate => avg_rating += rate.rating);
+
+          // let add = (increase, current) => increase + current;
+          rev.reviews.forEach(rate => avg_rating += rate.rating);
           
-          let filmAverage = Number((avg_rating / movie.reviews.length).toFixed(1));
+          // Thanks to Arne H. Bitubekk on stack overflow for the right kind of average 
+          // https://stackoverflow.com/questions/15762768/javascript-math-round-to-two-decimal-places
 
-         
-          // checking if average is greater than 4, if so add average rating to the array and push to the recomendations array
+          let filmAverage = Number(Math.round((avg_rating / rev.reviews.length) + 'e2') + 'e-2').toFixed(2);
+
+          
+            // checking if average is greater than 4, if so add average rating to the array and push to the recomendations array
           if(filmAverage >= 4.0){
 
             films_match.find((film, i)=>{
 
-              if(movie.film_id === film.id){
+              if(rev.film_id === film.id){
 
                 films_match[i].genre = films_match[i].genre.name;
                 films_match[i].averageRating = filmAverage;
-                films_match[i].reviews = movie.reviews.length;
-
+                films_match[i].reviews = rev.reviews.length;
+                
                 recommendations.recommendations.push(films_match[i]);
 
-                return true; 
+                // return true; 
               }
             });
           }
         }
       });
-      //offseting and limiting the recomendations object before sending it
-       if (recommendations.meta.offset > 0) {
+  //offseting and limiting the recomendations object before sending it
 
-         recommendations.recommendations.splice(0, recommendations.meta.offset);
-       }
-       
-       if (recommendations.recommendations.length > recommendations.meta.limit) {
+  if (recommendations.meta.offset > 0) {
 
-         recommendations.recommendations.splice(recommendations.meta.limit, recommendations.recommendations.length - recommendations.meta.limit);
+    recommendations.recommendations.splice(0, recommendations.meta.offset);
+  }
 
-       }
+  if (recommendations.recommendations.length > recommendations.meta.limit) {
 
-      responseFunction();
+    recommendations.recommendations.splice(recommendations.meta.limit, recommendations.recommendations.length - recommendations.meta.limit);
+
+  }
+
+  responseFunction();
     });
   }).catch(err => console.log(err));
-  
-let responseFunction = ()=>{res.status(200).json(recommendations);}
+
+  // Needs response to be declared on the function callback of the route to be able to send the recomendations data
+let responseFunction = () => { res.status(200).json(recommendations); };
+
 }
 
 module.exports = app;
